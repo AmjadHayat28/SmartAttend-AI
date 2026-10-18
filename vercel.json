@@ -3,8 +3,8 @@
   "services": {
     "backend": {
       "root": ".",
-      "framework": "fastapi",
-      "entrypoint": "backend.app.main:app"
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
     },
     "frontend": {
       "root": "frontend",
