@@ -79,13 +79,6 @@ async def lifespan(_: FastAPI):
 
     log.info("SmartClass API starting (pid %s, environment=%s, login rate limit=%s)", os.getpid(),
              settings.ENVIRONMENT, rate_limit_backend())
-    if settings.ENVIRONMENT.lower() == "production":
-        from backend.app.database.init_db import seed_super_admin, upgrade_database
-
-        log.info("Applying production database migrations")
-        upgrade_database()
-        seed_super_admin()
-        log.info("Production database bootstrap complete")
     try:
         Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)  # /health/ready checks it
     except OSError as exc:
