@@ -15,5 +15,6 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --frozen --no-dev --no-editable
 
 COPY backend ./backend
+COPY alembic.ini ./
 
-CMD ["sh", "-c", ".venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-80}"]
+CMD ["sh", "-c", ".venv/bin/python -m backend.app.database.init_db && .venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-80}"]
