@@ -1,0 +1,118 @@
+# SmartClass reverse proxy (Caddy 2). Values come from environment variables set by the
+# supervisor task (deploy/windows/setup_tasks.ps1):
+#   SMARTCLASS_SITE      e.g. localhost   (or attendance.your-university.edu with a public certificate)
+#   SMARTCLASS_WWW       the published frontend build (frontend/dist copy)
+#   SMARTCLASS_BACKEND   uvicorn address, loopback only, e.g. 127.0.0.1:8001
+#   SMARTCLASS_LOGS      log directory
+#   SMARTCLASS_CADDY_DATA  Caddy storage (local CA + certificates; keep private)
+#
+# Browser → https://{SMARTCLASS_SITE}  ─┬─ /api/*, /health/live → FastAPI (127.0.0.1 only)
+#                                        └─ everything else      → static files, SPA fallback
+{
+	admin localhost:2019
+	# Local/staging deployment: listen on this machine only. On a real server delete this line
+	# (or bind the server's LAN/public address) so other machines can reach the site.
+	default_bind 127.0.0.1 [::1]
+	storage file_system {
+		root {$SMARTCLASS_CADDY_DATA}
+	}
+	# The local CA is NOT added to the Windows trust store automatically (that needs an interactive
+	# confirmation). Trust it deliberately, per user or per test browser — see the deployment README.
+	skip_install_trust
+	log {
+		output file {$SMARTCLASS_LOGS}/caddy.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		level INFO
+	}
+}
+
+# Plain HTTP only redirects to HTTPS.
+http://{$SMARTCLASS_SITE} {
+	redir https://{host}{uri} 308
+}
+
+{$SMARTCLASS_SITE} {
+	# "internal" = certificate from Caddy's own local CA (staging / on-premises). With a public DNS
+	# name, delete this line and Caddy obtains a publicly trusted certificate automatically.
+	tls internal
+
+	encode zstd gzip
+
+	log {
+		output file {$SMARTCLASS_LOGS}/caddy-access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format json
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=()"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		-Server
+		-X-Powered-By
+	}
+
+	# API uploads: refused HERE above the backend's own limit (MAX_UPLOAD_SIZE_MB = 8 MiB, plus
+	# 64 KiB of multipart framing = 8256 KiB). Keep the two in step. (If the backend had to refuse
+	# a body the proxy is still streaming, the client would only see a dropped connection.)
+	handle /api/* {
+		request_body {
+			max_size 8256KiB
+		}
+		reverse_proxy {$SMARTCLASS_BACKEND} {
+			# Caddy sets X-Forwarded-For/-Proto/-Host itself; uvicorn trusts them from 127.0.0.1 only.
+			header_up Host {host}
+			health_uri /health/live
+			health_interval 10s
+			health_timeout 3s
+			fail_duration 10s
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 300s
+			}
+		}
+	}
+
+	# Liveness for external monitors. Readiness (/health/ready) is only reachable on the backend's
+	# loopback address, so database/model states are not published.
+	handle /health/live {
+		reverse_proxy {$SMARTCLASS_BACKEND}
+	}
+
+	handle {
+		request_body {
+			max_size 64KB
+		}
+		root * {$SMARTCLASS_WWW}
+		# Hashed build assets never change: cache for a year. Everything else (index.html via the
+		# SPA fallback) must be revalidated so a new release is picked up immediately.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /assets/*
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		# file_server never lists directories unless "browse" is given.
+		file_server
+	}
+
+	handle_errors {
+		@too_large expression {err.status_code} == 413
+		handle @too_large {
+			header Content-Type "application/json"
+			respond `{"detail":"Upload is too large. The maximum is 8 MB."}` 413
+		}
+		@backend_down expression {err.status_code} in [502, 503, 504]
+		handle @backend_down {
+			header Content-Type "application/json"
+			header Retry-After "10"
+			respond `{"detail":"The service is restarting. Please try again in a moment."}` 503
+		}
+	}
+}

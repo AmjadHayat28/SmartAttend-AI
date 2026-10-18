@@ -1,0 +1,45 @@
+[project]
+name = "smartclass-attendance"
+version = "0.1.0"
+description = "SmartClass AI Attendance Management System - FastAPI backend"
+authors = [
+    { name = "AmjadHayat28", email = "amjadhayat946010@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.20.0",
+    "bcrypt>=5.0.0",
+    "email-validator>=2.3.0",
+    "fastapi>=0.143.0",
+    "insightface>=2.1",
+    "onnxruntime>=1.31.0",
+    "opencv-python>=5.0.0.93",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
+    "passlib>=1.7.4",
+    "pillow>=12.3.0",
+    "psycopg2-binary>=2.9.13",
+    "pydantic-settings>=2.15.0",
+    "python-jose>=3.5.0",
+    "python-multipart>=0.0.32",
+    "sqlalchemy>=2.1.4",
+    "uvicorn>=0.54.0",
+]
+
+[tool.uv]
+# Application, not a library: uv manages the environment but does not build/install this project.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+    "postgres: needs SMARTCLASS_TEST_DATABASE_URL pointing at a PostgreSQL *test* database (skipped otherwise)",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]

@@ -1,0 +1,66 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+wheels/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Virtual environment (uv) ─────────────────────────────
+.venv/
+
+# ── Secrets / environment ────────────────────────────────
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.pem
+*.key
+
+# ── Local databases and backups (real student data and face embeddings — never commit) ──
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+backups/
+
+# ── Local AI-assistant / editor state ────────────────────
+.claude/settings.local.json
+
+# ── Uploaded data (student faces, profile photos, classroom photos) ──
+uploads/**
+!uploads/
+!uploads/*/
+!uploads/*/.gitkeep
+
+# ── AI model weights (downloaded at runtime) ─────────────
+models_cache/
+*.onnx
+# …except the small, hash-pinned face *detector* bundled for Phase 4 enrollment validation
+!backend/app/face_recognition/models/face_detection_yunet_2023mar.onnx
+
+# ── Exports ──────────────────────────────────────────────
+exports/
+*.xlsx
+
+# ── Frontend ─────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# ── OS / editor ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+.idea/
