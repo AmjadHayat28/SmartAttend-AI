@@ -16,5 +16,5 @@ RUN uv sync --frozen --no-dev --no-editable
 
 COPY backend ./backend
 COPY alembic.ini ./
-
+RUN .venv/bin/python -m backend.app.scripts.download_face_models buffalo_sc
 CMD ["sh", "-c", ".venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-80}"]
