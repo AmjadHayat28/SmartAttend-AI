@@ -1,33 +1,55 @@
-"""Private file storage for uploaded images.
+"""Private image storage.
 
-- Files live under settings.UPLOAD_DIR (outside the frontend; never served statically).
-- Names are random UUIDs; user-supplied filenames are never used.
-- Only relative paths are stored in the database and they are re-validated on every access,
-  so a tampered path can never escape UPLOAD_DIR (path traversal).
-- Writes go to a temp file first and are renamed into place, so a failed upload never leaves
-  a half-written image behind.
+Production:
+- Uses Cloudinary authenticated assets when Cloudinary credentials are configured.
+- Database still stores only server-generated relative identifiers.
+- Images remain accessible only through our authorised backend endpoints.
+
+Development:
+- Falls back to local filesystem storage under settings.UPLOAD_DIR.
 """
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import uuid
 from pathlib import Path
 from typing import Literal
 
+import requests
+
 from backend.app.core.config import settings
 
 Area = Literal["faces", "profiles", "attendance"]
 
-# The only shape a stored path can have — the server generates every one of them.
-# Whitelisting (rather than blacklisting "..", drive letters, backslashes, …) closes every
-# traversal trick on both POSIX and Windows.
-_STORED_PATH = re.compile(r"^(faces|profiles|attendance)/[1-9][0-9]{0,9}/[0-9a-f]{32}\.jpg$")
+_STORED_PATH = re.compile(
+    r"^(faces|profiles|attendance)/[1-9][0-9]{0,9}/[0-9a-f]{32}\.jpg$"
+)
 
 
 class StorageError(Exception):
     pass
+
+
+def _cloudinary_enabled() -> bool:
+    return bool(
+        os.environ.get("CLOUDINARY_CLOUD_NAME")
+        and os.environ.get("CLOUDINARY_API_KEY")
+        and os.environ.get("CLOUDINARY_API_SECRET")
+    )
+
+
+def _configure_cloudinary():
+    import cloudinary
+
+    cloudinary.config(
+        cloud_name=os.environ["CLOUDINARY_CLOUD_NAME"],
+        api_key=os.environ["CLOUDINARY_API_KEY"],
+        api_secret=os.environ["CLOUDINARY_API_SECRET"],
+        secure=True,
+    )
 
 
 def _root() -> Path:
@@ -35,24 +57,65 @@ def _root() -> Path:
 
 
 def resolve(relative_path: str) -> Path:
-    """Absolute path for a stored relative path, refusing anything outside UPLOAD_DIR."""
     if not isinstance(relative_path, str) or not _STORED_PATH.fullmatch(relative_path):
         raise StorageError("Invalid stored path")
+
     root = _root()
     path = (root / Path(*relative_path.split("/"))).resolve()
+
     if not path.is_relative_to(root):
         raise StorageError("Invalid stored path")
+
     return path
 
 
+def _validate(relative_path: str) -> str:
+    if not isinstance(relative_path, str) or not _STORED_PATH.fullmatch(relative_path):
+        raise StorageError("Invalid stored path")
+    return relative_path
+
+
+def _public_id(relative_path: str) -> str:
+    relative_path = _validate(relative_path)
+    return relative_path[:-4]  # remove .jpg
+
+
 def save(area: Area, owner_id: int, data: bytes, suffix: str = ".jpg") -> str:
-    """Store bytes as <area>/<owner_id>/<uuid><suffix>; return the relative path."""
-    if area not in ("faces", "profiles", "attendance") or not isinstance(owner_id, int) or owner_id <= 0 or suffix != ".jpg":
+    if (
+        area not in ("faces", "profiles", "attendance")
+        or not isinstance(owner_id, int)
+        or owner_id <= 0
+        or suffix != ".jpg"
+    ):
         raise StorageError("Invalid storage target")
+
     relative = f"{area}/{owner_id}/{uuid.uuid4().hex}{suffix}"
+
+    if _cloudinary_enabled():
+        try:
+            import cloudinary.uploader
+
+            _configure_cloudinary()
+
+            stream = io.BytesIO(data)
+            stream.name = "image.jpg"
+
+            cloudinary.uploader.upload(
+                stream,
+                public_id=_public_id(relative),
+                resource_type="image",
+                type="authenticated",
+                format="jpg",
+                overwrite=False,
+            )
+            return relative
+        except Exception as exc:
+            raise StorageError("Cloud image upload failed") from exc
+
     target = resolve(relative)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp")
+
     try:
         with open(tmp, "wb") as fh:
             fh.write(data)
@@ -61,30 +124,75 @@ def save(area: Area, owner_id: int, data: bytes, suffix: str = ".jpg") -> str:
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
+
     return relative
 
 
 def read(relative_path: str) -> bytes:
+    if _cloudinary_enabled():
+        try:
+            import cloudinary.utils
+
+            _configure_cloudinary()
+
+            url = cloudinary.utils.private_download_url(
+                _public_id(relative_path),
+                "jpg",
+                resource_type="image",
+                type="authenticated",
+            )
+
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            return response.content
+        except Exception as exc:
+            raise StorageError("File not found") from exc
+
     path = resolve(relative_path)
+
     if not path.is_file():
         raise StorageError("File not found")
+
     return path.read_bytes()
 
 
 def prune_dir(area: Area, owner_id: int) -> None:
-    """Remove <area>/<owner_id>/ if it is empty (best effort, after a committed delete)."""
-    if area not in ("faces", "profiles", "attendance") or not isinstance(owner_id, int) or owner_id <= 0:
+    if (
+        area not in ("faces", "profiles", "attendance")
+        or not isinstance(owner_id, int)
+        or owner_id <= 0
+    ):
         return
+
+    if _cloudinary_enabled():
+        return
+
     try:
-        (_root() / area / str(owner_id)).rmdir()  # only succeeds when empty
+        (_root() / area / str(owner_id)).rmdir()
     except OSError:
         pass
 
 
 def delete(relative_path: str | None) -> None:
-    """Best-effort removal (called only after the database change has committed)."""
     if not relative_path:
         return
+
+    if _cloudinary_enabled():
+        try:
+            import cloudinary.uploader
+
+            _configure_cloudinary()
+
+            cloudinary.uploader.destroy(
+                _public_id(relative_path),
+                resource_type="image",
+                type="authenticated",
+                invalidate=True,
+            )
+        except Exception:
+            pass
+        return
+
     try:
         resolve(relative_path).unlink(missing_ok=True)
     except (StorageError, OSError):
