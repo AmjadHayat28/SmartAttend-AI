@@ -37,6 +37,39 @@ def test_tampered_model_file_is_refused(tmp_path, monkeypatch):
         verify_installed(target)
 
 
+def test_container_installer_discards_archive_and_reuses_verified_pack(tmp_path, monkeypatch):
+    from backend.app.scripts import download_face_models
+
+    zip_path, digest = _pack(tmp_path, name="buffalo_sc")
+    monkeypatch.setitem(model_store.KNOWN_PACKS, "buffalo_sc", (digest, 0.1))
+    monkeypatch.setattr(download_face_models.settings, "FACE_RECOGNITION_MODEL_DIR", tmp_path)
+    monkeypatch.setattr("sys.argv", ["download_face_models", "buffalo_sc", "--discard-archive"])
+    # Even Vercel production build tools must not require runtime Cloudinary secrets.
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", "production")
+    for name in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(model_store, "_download", lambda *a, **k: pytest.fail("must remain offline"))
+    assert download_face_models.main() == 0
+    assert not zip_path.exists()
+    target = tmp_path / "models" / "buffalo_sc"
+    assert set(verify_installed(target)) == {"det.onnx", "rec.onnx"}
+    assert download_face_models.main() == 0  # installed pack works without its ZIP
+    (target / "rec.onnx").write_bytes(b"tampered")
+    assert download_face_models.main() == 1
+
+
+def test_model_installer_keeps_archive_by_default(tmp_path, monkeypatch):
+    from backend.app.scripts import download_face_models
+
+    zip_path, digest = _pack(tmp_path)
+    monkeypatch.setitem(model_store.KNOWN_PACKS, "testpack", (digest, 0.1))
+    monkeypatch.setattr(download_face_models.settings, "FACE_RECOGNITION_MODEL_DIR", tmp_path)
+    monkeypatch.setattr("sys.argv", ["download_face_models", "testpack"])
+    assert download_face_models.main() == 0
+    assert zip_path.exists()  # ordinary/self-hosted installer behavior is preserved
+
+
 def test_download_with_wrong_digest_is_rejected(tmp_path, monkeypatch):
     _pack(tmp_path)
     monkeypatch.setitem(model_store.KNOWN_PACKS, "testpack", ("0" * 64, 0.1))

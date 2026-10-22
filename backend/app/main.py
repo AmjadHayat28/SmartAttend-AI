@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from backend.app.api.router import api_router
 from backend.app.auth.dependencies import DbSession
 from backend.app.core.config import settings
+from backend.app.services import storage
 from backend.app.services.image_validation import max_upload_bytes
 
 log = logging.getLogger("smartclass.app")
@@ -79,10 +80,12 @@ async def lifespan(_: FastAPI):
 
     log.info("SmartClass API starting (pid %s, environment=%s, login rate limit=%s)", os.getpid(),
              settings.ENVIRONMENT, rate_limit_backend())
-    try:
-        Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)  # /health/ready checks it
-    except OSError as exc:
-        log.error("Upload directory cannot be created (%s); uploads will fail", type(exc).__name__)
+    storage.validate_runtime_storage()
+    if not storage.cloudinary_enabled():
+        try:
+            Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)  # /health/ready checks it
+        except OSError as exc:
+            log.error("Upload directory cannot be created (%s); uploads will fail", type(exc).__name__)
     if settings.FACE_RECOGNITION_ENABLED and settings.FACE_RECOGNITION_PRELOAD:
         from backend.app.face_recognition.model import preload_engine
 
@@ -157,8 +160,7 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 - any failure means "not ready"
             log.error("Readiness: database check failed (%s)", type(exc).__name__)
             checks["database"] = "unavailable"
-        upload_dir = Path(settings.UPLOAD_DIR)
-        checks["uploads"] = "ok" if upload_dir.is_dir() and os.access(upload_dir, os.W_OK) else "unavailable"
+        checks["uploads"] = "ok" if storage.ready() else "unavailable"
         from backend.app.face_recognition.model import engine_status
 
         checks["face_recognition"] = engine_status()

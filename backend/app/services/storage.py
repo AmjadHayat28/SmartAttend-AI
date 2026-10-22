@@ -33,12 +33,35 @@ class StorageError(Exception):
     pass
 
 
-def _cloudinary_enabled() -> bool:
+def cloudinary_enabled() -> bool:
     return bool(
         os.environ.get("CLOUDINARY_CLOUD_NAME")
         and os.environ.get("CLOUDINARY_API_KEY")
         and os.environ.get("CLOUDINARY_API_SECRET")
     )
+
+
+def _vercel_production() -> bool:
+    return os.environ.get("VERCEL") == "1" and os.environ.get("VERCEL_ENV") == "production"
+
+
+def validate_runtime_storage() -> None:
+    """Called at startup, never on import: model builds do not need storage secrets."""
+    if _vercel_production() and not cloudinary_enabled():
+        raise StorageError(
+            "Vercel production requires CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and "
+            "CLOUDINARY_API_SECRET. Refusing ephemeral local upload storage."
+        )
+
+
+def ready() -> bool:
+    """Configuration/local readiness only; no remote calls or credential disclosure."""
+    if cloudinary_enabled():
+        return True
+    if _vercel_production():
+        return False
+    root = Path(settings.UPLOAD_DIR)
+    return root.is_dir() and os.access(root, os.W_OK)
 
 
 def _configure_cloudinary():
@@ -91,7 +114,7 @@ def save(area: Area, owner_id: int, data: bytes, suffix: str = ".jpg") -> str:
 
     relative = f"{area}/{owner_id}/{uuid.uuid4().hex}{suffix}"
 
-    if _cloudinary_enabled():
+    if cloudinary_enabled():
         try:
             import cloudinary.uploader
 
@@ -129,7 +152,7 @@ def save(area: Area, owner_id: int, data: bytes, suffix: str = ".jpg") -> str:
 
 
 def read(relative_path: str) -> bytes:
-    if _cloudinary_enabled():
+    if cloudinary_enabled():
         try:
             import cloudinary.utils
 
@@ -164,7 +187,7 @@ def prune_dir(area: Area, owner_id: int) -> None:
     ):
         return
 
-    if _cloudinary_enabled():
+    if cloudinary_enabled():
         return
 
     try:
@@ -177,7 +200,7 @@ def delete(relative_path: str | None) -> None:
     if not relative_path:
         return
 
-    if _cloudinary_enabled():
+    if cloudinary_enabled():
         try:
             import cloudinary.uploader
 

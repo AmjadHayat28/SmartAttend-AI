@@ -12,9 +12,17 @@ RUN apt-get update \
     && pip install --no-cache-dir uv==0.10.11
 
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable --no-cache
+
+# Only the model installer and its imports precede the model layer. Changes to
+# routes/services must not cause another download of this unchanged model pack.
+COPY backend/__init__.py ./backend/
+COPY backend/app/__init__.py ./backend/app/
+COPY backend/app/core/__init__.py backend/app/core/config.py ./backend/app/core/
+COPY backend/app/face_recognition/__init__.py backend/app/face_recognition/model_store.py ./backend/app/face_recognition/
+COPY backend/app/scripts/__init__.py backend/app/scripts/download_face_models.py ./backend/app/scripts/
+RUN .venv/bin/python -m backend.app.scripts.download_face_models buffalo_sc --discard-archive
 
 COPY backend ./backend
 COPY alembic.ini ./
-RUN .venv/bin/python -m backend.app.scripts.download_face_models buffalo_sc
 CMD ["sh", "-c", ".venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-80}"]
